@@ -3,11 +3,13 @@ package rest
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
 	"mime/multipart"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
@@ -16,7 +18,7 @@ import (
 	uuid "github.com/forkyid/go-utils/uuid"
 	"github.com/gin-gonic/gin"
 	"github.com/globalsign/mgo/bson"
-	"github.com/go-playground/validator"
+	"github.com/go-playground/validator/v10"
 )
 
 // Response types
@@ -25,6 +27,7 @@ type Response struct {
 	Error   string            `json:"error,omitempty"`
 	Message string            `json:"message,omitempty"`
 	Detail  map[string]string `json:"detail,omitempty"`
+	Status  int               `json:"status,omitempty"`
 }
 
 // ResponseResult types
@@ -33,18 +36,9 @@ type ResponseResult struct {
 	UUID    string
 }
 
-// Request types
-type Request struct {
-	URL     string
-	Method  string
-	Headers map[string]string
-	Body    io.Reader
-	Queries map[string]string
-}
-
 // Log uses current response context to log
 func (resp ResponseResult) Log(message string) {
-	logger.LogError(resp.Context, resp.UUID, message)
+	logger.LogWithContext(resp.Context, resp.UUID, message)
 }
 
 // ErrorDetails contains '|' separated details for each field
@@ -86,6 +80,7 @@ func ResponseData(context *gin.Context, status int, payload interface{}, msg ...
 	}
 
 	context.JSON(status, response)
+	go InsertAPIActivity(context, status, payload, msg[0])
 	return ResponseResult{context, uuid.GetUUID()}
 }
 
@@ -116,6 +111,7 @@ func ResponseMessage(context *gin.Context, status int, msg ...string) ResponseRe
 	}
 
 	context.JSON(status, response)
+	go InsertAPIActivity(context, status, nil, msg[0])
 	return ResponseResult{context, response.Error}
 }
 
@@ -163,19 +159,19 @@ func ResponseError(context *gin.Context, status int, detail interface{}, msg ...
 }
 
 // MultipartForm creates multipart payload
-func MultipartForm(fileKey string, files *[][]byte, params *map[string]string, multiParams *map[string][]string) (io.Reader, string) {
+func MultipartForm(fileKey string, files [][]byte, params map[string]string, multiParams map[string][]string) (io.Reader, string) {
 	body := new(bytes.Buffer)
 	writer := multipart.NewWriter(body)
-	for _, j := range *files {
+	for _, j := range files {
 		part, _ := writer.CreateFormFile(fileKey, bson.NewObjectId().Hex())
 		part.Write(j)
 	}
-	for k, v := range *multiParams {
+	for k, v := range multiParams {
 		for _, j := range v {
 			writer.WriteField(k, j)
 		}
 	}
-	for k, v := range *params {
+	for k, v := range params {
 		writer.WriteField(k, v)
 	}
 	err := writer.Close()
@@ -197,52 +193,54 @@ func GetData(jsonBody []byte) (json.RawMessage, error) {
 	return data, err
 }
 
-// Send func
-// return []byte, int
-func (request Request) Send() ([]byte, int) {
-	if !validMethod(request.Method) {
-		log.Println("[WARN] Unsupported method supplied, use one of constants provided by http package (e.g. http.MethodGet)")
-		return nil, -1
-	}
-
-	req, _ := http.NewRequest(request.Method, request.URL, request.Body)
-
-	for k, v := range request.Headers {
-		req.Header.Set(k, v)
-	}
-
-	if request.Method == http.MethodGet {
-		q := req.URL.Query()
-		for k, v := range request.Headers {
-			q.Add(k, v)
-		}
-		req.URL.RawQuery = q.Encode()
-	}
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
+// InsertAPIActivity params
+// @context: *gin.Context
+// status: int
+// payload: interface
+// msg: string
+func InsertAPIActivity(context *gin.Context, status int, payload interface{}, msg ...string) {
+	requestBody, err := ioutil.ReadAll(context.Request.Body)
 	if err != nil {
-		log.Println("ERROR: ["+request.Method+"]", err.Error())
-		return nil, -1
+		log.Println("read body failed " + err.Error())
 	}
 
-	defer resp.Body.Close()
-	body, _ := ioutil.ReadAll(resp.Body)
+	var requestBodyInterface map[string]interface{}
+	if len(requestBody) > 1 {
+		err = json.Unmarshal(requestBody, &requestBodyInterface)
+		if err != nil {
+			log.Println("unmarshal data failed " + err.Error())
+		}
+	}
+	body := &APIActivity{
+		Request: ActivityRequest{
+			Method:          context.Request.Method,
+			URL:             context.Request.URL,
+			Header:          context.Request.Header,
+			Body:            requestBodyInterface,
+			Host:            context.Request.Host,
+			Form:            context.Request.Form,
+			PostForm:        context.Request.PostForm,
+			MultipartForm:   context.Request.MultipartForm,
+			RemoteAddr:      context.Request.RemoteAddr,
+			PublicIPAddress: context.ClientIP(),
+			RequestURI:      context.Request.RequestURI,
+		},
+		Response: Response{
+			Body:    payload,
+			Status:  status,
+			Message: msg[0],
+		},
+	}
 
-	return body, resp.StatusCode
-}
-
-// validMethod params
-// @method: string
-// return bool
-func validMethod(method string) bool {
-	return method == http.MethodConnect ||
-		method == http.MethodDelete ||
-		method == http.MethodGet ||
-		method == http.MethodHead ||
-		method == http.MethodOptions ||
-		method == http.MethodPatch ||
-		method == http.MethodPost ||
-		method == http.MethodPut ||
-		method == http.MethodTrace
+	buf := new(bytes.Buffer)
+	json.NewEncoder(buf).Encode(body)
+	req := Request{
+		URL:    fmt.Sprintf("%v/activity/v1/apis", os.Getenv("API_ORIGIN_URL")),
+		Method: http.MethodPost,
+		Body:   buf,
+	}
+	_, code := req.Send()
+	if code != http.StatusOK {
+		log.Println("insert to api activity failed, status code " + strconv.Itoa(code))
+	}
 }
