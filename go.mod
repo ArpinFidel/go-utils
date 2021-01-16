@@ -1,4 +1,4 @@
-module github.com/forkyid/go-utils
+module github.com/ArpinFidel/go-utils
 
 go 1.14
 

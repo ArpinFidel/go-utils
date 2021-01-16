@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	page "github.com/forkyid/go-utils/pagination"
+	page "github.com/ArpinFidel/go-utils/pagination"
 	"github.com/stretchr/testify/assert"
 )
 

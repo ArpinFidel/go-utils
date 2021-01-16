@@ -6,8 +6,8 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/forkyid/go-utils/rest"
-	"github.com/forkyid/go-utils/rest/restid"
+	"github.com/ArpinFidel/go-utils/rest"
+	"github.com/ArpinFidel/go-utils/rest/restid"
 	"github.com/go-playground/validator/v10"
 )
 

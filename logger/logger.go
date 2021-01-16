@@ -12,7 +12,7 @@ import (
 	"net"
 	"strings"
 
-	"github.com/forkyid/go-utils/uuid"
+	"github.com/ArpinFidel/go-utils/uuid"
 	"github.com/gin-gonic/gin"
 	"github.com/olivere/elastic"
 	"github.com/sirupsen/logrus"
